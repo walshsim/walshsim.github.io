@@ -14,287 +14,349 @@ const statPhase = document.getElementById('stat-phase');
 const speedVal = document.getElementById('speed-val');
 const zoomVal = document.getElementById('zoom-val');
 
-// Simulation Constants
+// Simulation Constants (Earth radii units)
 const LUNAR_MONTH_DAYS = 27.32;
 const DIST_EARTH_RAD = 60.27;
 const EARTH_RAD = 1.0;
 const MOON_RAD = 0.273;
-const ORBIT_TILT = 5.14 * (Math.PI / 180); // 5.14 degrees to radians
+const ORBIT_TILT = 5.14 * (Math.PI / 180);
 
 // State Variables
 let paused = false;
 let angle = 0;
-let trailPoints = [];
 let stars = [];
+let topTrail = [];
+let sideTrail = [];
 
-// Initialize Stars
 function initStars() {
-    stars = [];
-    const numStars = 200;
-    for (let i = 0; i < numStars; i++) {
-        stars.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * canvas.height,
-            size: Math.random() * 1.5,
-            opacity: Math.random()
-        });
-    }
+  stars = [];
+  const numStars = 200;
+  for (let i = 0; i < numStars; i++) {
+    stars.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      size: Math.random() * 1.5,
+      opacity: Math.random()
+    });
+  }
 }
 
-// Resize Handler
 function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    initStars();
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  initStars();
 }
 
 window.addEventListener('resize', resize);
 
-// Stats update loop helpers
-function updateUI(angle) {
-    // Normalize angle to 0 - 2PI range for display if needed, but linear accumulation is fine for days
-    const totalRotations = angle / (Math.PI * 2);
-    const daysElapsed = totalRotations * LUNAR_MONTH_DAYS;
-    
-    // Format days
-    statDays.textContent = daysElapsed.toFixed(2).padStart(6, '0') + '_DAYS';
+function updateUI(currentAngle) {
+  const totalRotations = currentAngle / (Math.PI * 2);
+  const daysElapsed = totalRotations * LUNAR_MONTH_DAYS;
 
-    // Update Speed Display
-    const speed = parseFloat(speedInput.value);
-    speedVal.textContent = (speed / 0.01).toFixed(1) + 'x';
-    
-    const zoom = parseFloat(zoomInput.value);
-    zoomVal.textContent = zoom.toFixed(1) + 'x';
+  statDays.textContent = `${daysElapsed.toFixed(2).padStart(6, '0')}_DAYS`;
+  speedVal.textContent = `${(parseFloat(speedInput.value) / 0.01).toFixed(1)}x`;
+  zoomVal.textContent = `${parseFloat(zoomInput.value).toFixed(1)}x`;
 }
 
 pauseBtn.onclick = () => {
-    paused = !paused;
-    pauseBtn.textContent = paused ? 'EXEC::RESUME' : 'EXEC::PAUSE';
-    
-    const statusBadge = document.querySelector('.terminal-badge.status-active');
-    if (paused) {
-        statStatus.textContent = 'PAUSED';
-        if (statusBadge) statusBadge.style.borderColor = 'var(--accent-red)';
-        statStatus.style.color = 'var(--accent-red)';
-    } else {
-        statStatus.textContent = 'NOMINAL';
-        if (statusBadge) statusBadge.style.borderColor = '#00ff88';
-        statStatus.style.color = '#00ff88';
-    }
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'EXEC::RESUME' : 'EXEC::PAUSE';
+
+  const statusBadge = document.querySelector('.terminal-badge.status-active');
+  if (paused) {
+    statStatus.textContent = 'PAUSED';
+    if (statusBadge) statusBadge.style.borderColor = 'var(--accent-red)';
+    statStatus.style.color = 'var(--accent-red)';
+  } else {
+    statStatus.textContent = 'NOMINAL';
+    if (statusBadge) statusBadge.style.borderColor = '#00ff88';
+    statStatus.style.color = '#00ff88';
+  }
 };
 
 resetBtn.onclick = () => {
-    angle = 0;
-    trailPoints = [];
-    // Reset indicators if needed
+  angle = 0;
+  topTrail = [];
+  sideTrail = [];
 };
 
+function drawBackground(w, h) {
+  ctx.fillStyle = '#020408';
+  ctx.fillRect(0, 0, w, h);
+
+  for (const s of stars) {
+    ctx.fillStyle = `rgba(0, 242, 255, ${s.opacity * 0.35})`;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawViewport(cx, cy, width, height, label) {
+  ctx.save();
+  ctx.translate(cx - width / 2, cy - height / 2);
+
+  ctx.fillStyle = 'rgba(0, 8, 14, 0.42)';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0, 0, width, height);
+
+  ctx.fillStyle = 'rgba(0, 242, 255, 0.5)';
+  ctx.font = '700 10px Syncopate';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, 10, 18);
+
+  ctx.restore();
+}
+
+function drawShadowCone(occluderX, occluderY, radiusPx, directionX = -1) {
+  const shadowLen = radiusPx * 45;
+  const spread = radiusPx * 1.6;
+
+  const grad = ctx.createLinearGradient(occluderX, occluderY, occluderX + directionX * shadowLen, occluderY);
+  grad.addColorStop(0, 'rgba(12, 18, 38, 0.65)');
+  grad.addColorStop(1, 'rgba(12, 18, 38, 0)');
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(occluderX, occluderY - radiusPx * 0.9);
+  ctx.lineTo(occluderX + directionX * shadowLen, occluderY - spread);
+  ctx.lineTo(occluderX + directionX * shadowLen, occluderY + spread);
+  ctx.lineTo(occluderX, occluderY + radiusPx * 0.9);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawBody(x, y, radius, litRight) {
+  ctx.fillStyle = '#0a1a2f';
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(0, 242, 255, 0.12)';
+  ctx.beginPath();
+  if (litRight) {
+    ctx.arc(x, y, radius, -Math.PI / 2, Math.PI / 2);
+  } else {
+    ctx.arc(x, y, radius, Math.PI / 2, -Math.PI / 2);
+  }
+  ctx.fill();
+
+  ctx.strokeStyle = '#00f2ff';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawTrail(points) {
+  if (points.length < 2) return;
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.stroke();
+}
+
+function drawScaleBar(viewLeft, viewBottom, pxPerER) {
+  const barER = 10;
+  const barPx = barER * pxPerER;
+  const x = viewLeft + 14;
+  const y = viewBottom - 14;
+
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.75)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + barPx, y);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(0, 242, 255, 0.7)';
+  ctx.font = '11px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText('10 R⊕', x, y - 6);
+}
+
+function drawOrbitView(config) {
+  const { cx, cy, width, height, moonX, moonY, pxPerER, label, trail, sideView } = config;
+
+  drawViewport(cx, cy, width, height, label);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cx - width / 2, cy - height / 2, width, height);
+  ctx.clip();
+
+  const earthX = cx;
+  const earthY = cy;
+  const earthR = EARTH_RAD * pxPerER;
+  const moonR = MOON_RAD * pxPerER;
+
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.12)';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  if (sideView) {
+    ctx.ellipse(earthX, earthY, DIST_EARTH_RAD * pxPerER, DIST_EARTH_RAD * Math.sin(ORBIT_TILT) * pxPerER, 0, 0, Math.PI * 2);
+  } else {
+    ctx.arc(earthX, earthY, DIST_EARTH_RAD * pxPerER, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  drawShadowCone(earthX, earthY, earthR, -1);
+  drawShadowCone(earthX + moonX, earthY + moonY, moonR, -1);
+
+  if (trailsChk.checked) drawTrail(trail);
+
+  drawBody(earthX, earthY, earthR, true);
+
+  ctx.fillStyle = '#111925';
+  ctx.beginPath();
+  ctx.arc(earthX + moonX, earthY + moonY, moonR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#00f2ff';
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(earthX, earthY);
+  ctx.lineTo(earthX + moonX, earthY + moonY);
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.22)';
+  ctx.stroke();
+
+  ctx.restore();
+
+  drawScaleBar(cx - width / 2, cy + height / 2, pxPerER);
+}
+
+function drawPhaseView(cx, cy, orbitAngle) {
+  const r = 96;
+  const phaseAngle = ((orbitAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  const litFraction = (1 - Math.cos(phaseAngle)) / 2;
+  const litOnRight = phaseAngle < Math.PI;
+  const terminatorX = Math.abs(Math.cos(phaseAngle)) * r;
+  const isGibbous = litFraction > 0.5;
+
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.15)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 12, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = '#050a10';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.fillStyle = '#e2e8f0';
+  ctx.beginPath();
+  if (litOnRight) ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2);
+  else ctx.arc(cx, cy, r, Math.PI / 2, -Math.PI / 2);
+  ctx.fill();
+
+  ctx.fillStyle = isGibbous ? '#e2e8f0' : '#050a10';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, terminatorX, r, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const deg = (phaseAngle * 180) / Math.PI;
+  if (deg < 12 || deg >= 348) statPhase.textContent = 'NEW_MOON';
+  else if (deg < 78) statPhase.textContent = 'WAXING_CRESCENT';
+  else if (deg < 102) statPhase.textContent = 'FIRST_QUARTER';
+  else if (deg < 168) statPhase.textContent = 'WAXING_GIBBOUS';
+  else if (deg < 192) statPhase.textContent = 'FULL_MOON';
+  else if (deg < 258) statPhase.textContent = 'WANING_GIBBOUS';
+  else if (deg < 282) statPhase.textContent = 'LAST_QUARTER';
+  else statPhase.textContent = 'WANING_CRESCENT';
+}
+
+function drawSunArrow(x, y) {
+  ctx.strokeStyle = 'rgba(255, 200, 120, 0.65)';
+  ctx.fillStyle = 'rgba(255, 200, 120, 0.85)';
+  ctx.lineWidth = 2;
+
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - 90, y);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x - 90, y);
+  ctx.lineTo(x - 78, y - 8);
+  ctx.lineTo(x - 78, y + 8);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.font = '10px Syncopate';
+  ctx.fillText('SUNLIGHT', x - 175, y - 10);
+}
+
 function draw() {
-    const w = canvas.width, h = canvas.height;
+  const w = canvas.width;
+  const h = canvas.height;
 
-    // Clear background
-    ctx.fillStyle = '#020408';
-    ctx.fillRect(0, 0, w, h);
+  drawBackground(w, h);
 
-    // Draw stars
-    stars.forEach(s => {
-        ctx.fillStyle = `rgba(0, 242, 255, ${s.opacity * 0.4})`;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
-        ctx.fill();
-    });
+  const zoom = parseFloat(zoomInput.value);
+  const speed = parseFloat(speedInput.value);
+  if (!paused) angle = (angle + speed) % (Math.PI * 20000);
+  updateUI(angle);
 
-    const zoom = parseFloat(zoomInput.value);
-    const speed = parseFloat(speedInput.value);
-    
-    if (!paused) {
-        angle = (angle + speed) % (Math.PI * 20000); // Keep angle from growing indefinitely large, but allow cycles
-    }
+  const orbitAngle = angle % (Math.PI * 2);
 
-    // Pass the raw angle for cumulative calculation
-    updateUI(angle);
-    
-    // Use modulo for orbital position
-    const orbitAngle = angle % (Math.PI * 2);
+  const pxPerER = 2.8 * zoom;
 
-    // Layout centers
-    const leftX = w * 0.4;
-    const topY = h * 0.35;
-    const sideY = h * 0.75;
-    const phaseX = w * 0.78;
-    const phaseY = h * 0.5;
+  const layoutLeft = w * 0.42;
+  const topY = h * 0.31;
+  const sideY = h * 0.71;
+  const viewW = Math.min(w * 0.62, DIST_EARTH_RAD * pxPerER * 2.3);
+  const viewH = Math.max(180, h * 0.26);
 
-    // Pixels per Earth Radius
-    const pxPerER = 6 * zoom;
-    
-    const moonX = Math.cos(orbitAngle) * DIST_EARTH_RAD * pxPerER;
-    const moonY = Math.sin(orbitAngle) * DIST_EARTH_RAD * pxPerER;
-    // Z coordinate (height relative to ecliptic) due to tilt
-    // For side view: vertical displacement is Z
-    const moonZ = Math.sin(orbitAngle) * Math.sin(ORBIT_TILT) * DIST_EARTH_RAD * pxPerER;
+  const moonX = Math.cos(orbitAngle) * DIST_EARTH_RAD * pxPerER;
+  const moonYTop = Math.sin(orbitAngle) * DIST_EARTH_RAD * pxPerER;
+  const moonYSide = Math.sin(orbitAngle) * Math.sin(ORBIT_TILT) * DIST_EARTH_RAD * pxPerER;
 
-    // Draw views
-    drawOrbitView(leftX, topY, moonX, moonY, pxPerER, 'COORD_SYSTEM::ECLIPTIC_TOP', true);
-    drawOrbitView(leftX, sideY, moonX, moonZ, pxPerER, 'COORD_SYSTEM::ORBITAL_TILT', false);
-    drawPhaseView(phaseX, phaseY, orbitAngle);
+  topTrail.push({ x: layoutLeft + moonX, y: topY + moonYTop });
+  sideTrail.push({ x: layoutLeft + moonX, y: sideY + moonYSide });
+  if (topTrail.length > 260) topTrail.shift();
+  if (sideTrail.length > 260) sideTrail.shift();
 
-    requestAnimationFrame(draw);
+  drawOrbitView({
+    cx: layoutLeft,
+    cy: topY,
+    width: viewW,
+    height: viewH,
+    moonX,
+    moonY: moonYTop,
+    pxPerER,
+    label: 'TOP VIEW (ECLIPTIC)',
+    trail: topTrail,
+    sideView: false
+  });
+
+  drawOrbitView({
+    cx: layoutLeft,
+    cy: sideY,
+    width: viewW,
+    height: viewH,
+    moonX,
+    moonY: moonYSide,
+    pxPerER,
+    label: 'SIDE VIEW (5.14° INCLINATION)',
+    trail: sideTrail,
+    sideView: true
+  });
+
+  drawSunArrow(layoutLeft + viewW / 2 - 18, topY - viewH / 2 + 24);
+  drawPhaseView(w * 0.79, h * 0.5, orbitAngle);
+
+  requestAnimationFrame(draw);
 }
 
-function drawOrbitView(cx, cy, mx, my, pxPerER, label, isTopDown) {
-    ctx.save();
-    ctx.translate(cx, cy);
-
-    // Label
-    ctx.fillStyle = 'rgba(0, 242, 255, 0.4)';
-    ctx.font = '700 10px Syncopate';
-    ctx.textAlign = 'left';
-    ctx.fillText(label, -DIST_EARTH_RAD * pxPerER, -DIST_EARTH_RAD * pxPerER - 20);
-
-    // Crosshair/Grid reference
-    ctx.strokeStyle = 'rgba(0, 242, 255, 0.05)';
-    ctx.beginPath();
-    ctx.moveTo(-canvas.width, 0); ctx.lineTo(canvas.width, 0);
-    ctx.moveTo(0, -canvas.height); ctx.lineTo(0, canvas.height);
-    ctx.stroke();
-
-    // Orbit path
-    ctx.strokeStyle = 'rgba(0, 242, 255, 0.15)';
-    ctx.setLineDash([2, 4]);
-    ctx.beginPath();
-    // For top-down view, the orbit is a circle
-    // For side view (tilt), the orbit looks like a line or very thin ellipse if we account for perspective, 
-    // but here we are projecting 2D coordinates directly (mx, mz).
-    // Let's keep it simple: circle for top, line for side if we want strict projection, 
-    // but the original code drew an arc for both which implies a specific visualization style.
-    // Given the original code: ctx.arc(0, 0, DIST_EARTH_RAD * pxPerER, 0, Math.PI * 2);
-    // This draws a circle guide in both views. We'll keep that as a reference ring.
-    ctx.arc(0, 0, DIST_EARTH_RAD * pxPerER, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Earth
-    // Outer Glow
-    const earthGlow = ctx.createRadialGradient(0, 0, EARTH_RAD * pxPerER, 0, 0, EARTH_RAD * pxPerER * 2);
-    earthGlow.addColorStop(0, 'rgba(0, 242, 255, 0.2)');
-    earthGlow.addColorStop(1, 'rgba(0, 242, 255, 0)');
-    ctx.fillStyle = earthGlow;
-    ctx.beginPath();
-    ctx.arc(0, 0, EARTH_RAD * pxPerER * 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Earth Body
-    ctx.fillStyle = '#0a1a2f';
-    ctx.beginPath();
-    ctx.arc(0, 0, EARTH_RAD * pxPerER, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'var(--accent-cyan)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Earth Day/Night line
-    // Assuming sun is to the RIGHT (angle 0)
-    ctx.fillStyle = 'rgba(0, 242, 255, 0.1)';
-    ctx.beginPath();
-    // Shadow side is the left half
-    ctx.arc(0, 0, EARTH_RAD * pxPerER, Math.PI/2, 3*Math.PI/2, false);
-    ctx.fill();
-
-    // Moon
-    // Trail (Simplified)
-    if (trailsChk.checked) {
-        // Simple trail logic could be added here if we were storing points per view
-        // For now, let's leave it as a placeholder as in the original code
-    }
-
-    // Moon Body
-    ctx.fillStyle = '#020408';
-    ctx.strokeStyle = 'var(--accent-cyan)';
-    ctx.beginPath();
-    ctx.arc(mx, my, MOON_RAD * pxPerER, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Moon pointer line
-    ctx.strokeStyle = 'rgba(0, 242, 255, 0.3)';
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(mx, my);
-    ctx.stroke();
-
-    ctx.restore();
-}
-
-function drawPhaseView(cx, cy, angle) {
-    const r = 100;
-    
-    // UI Rings
-    ctx.strokeStyle = 'rgba(0, 242, 255, 0.1)';
-    ctx.beginPath(); ctx.arc(cx, cy, r + 10, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(cx, cy, r + 20, 0, Math.PI * 2); ctx.stroke();
-
-    // Dark Moon Body (Base)
-    ctx.fillStyle = '#050a10';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Fixed astronomical reference frame:
-    // - Sunlight always comes from the RIGHT side of the phase disk.
-    // - orbitAngle = 0   => New Moon
-    // - orbitAngle = PI  => Full Moon
-    // - 0..PI            => Waxing phases (right side lit)
-    // - PI..2PI          => Waning phases (left side lit)
-    const phaseAngle = ((angle % (Math.PI * 2)) + (Math.PI * 2)) % (Math.PI * 2);
-    const illuminationFraction = (1 - Math.cos(phaseAngle)) / 2; // 0=new, 1=full
-    const litOnRight = phaseAngle < Math.PI;
-    const isGibbous = illuminationFraction > 0.5;
-    const terminatorRadiusX = Math.abs(Math.cos(phaseAngle)) * r;
-    const moonLitColor = '#e2e8f0';
-    const moonShadowColor = '#050a10';
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.clip();
-
-    // Draw the sun-facing semicircle first (right for waxing, left for waning).
-    ctx.fillStyle = moonLitColor;
-    ctx.shadowBlur = 12;
-    ctx.shadowColor = 'rgba(226, 232, 240, 0.45)';
-    ctx.beginPath();
-    if (litOnRight) {
-        ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, false); // Right half
-    } else {
-        ctx.arc(cx, cy, r, Math.PI / 2, -Math.PI / 2, false); // Left half
-    }
-    ctx.fill();
-
-    // Adjust to crescent/gibbous by adding/removing with a centered terminator ellipse.
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = isGibbous ? moonLitColor : moonShadowColor;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, terminatorRadiusX, r, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-
-    // Determine phase name in the same fixed frame used by rendering.
-    const deg = (phaseAngle * 180 / Math.PI) % 360;
-    let name = "";
-
-    if (deg < 12 || deg >= 348) name = "NEW_MOON";
-    else if (deg < 78) name = "WAXING_CRESCENT";
-    else if (deg < 102) name = "FIRST_QUARTER";
-    else if (deg < 168) name = "WAXING_GIBBOUS";
-    else if (deg < 192) name = "FULL_MOON";
-    else if (deg < 258) name = "WANING_GIBBOUS";
-    else if (deg < 282) name = "LAST_QUARTER";
-    else name = "WANING_CRESCENT";
-    
-    statPhase.textContent = name;
-}
-
-// Initialize
 resize();
 draw();
