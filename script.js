@@ -239,91 +239,58 @@ function drawPhaseView(cx, cy, angle) {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
 
-    // We need to calculate phase based on angle.
-    // Angle 0 = Full Moon (Opposite to Sun? No, usually Angle 0 is towards Sun in math, but let's check standard).
-    // Standard: Sun is at infinity to the right (0 radians).
-    // Earth at center.
-    // Moon at 0 radians = Between Earth and Sun = New Moon.
-    // Moon at PI radians = Earth between Moon and Sun = Full Moon.
-    
-    const phaseAngle = angle % (Math.PI * 2);
-    
-    // Illumination calc:
-    // New Moon (0): 0% illuminated.
-    // Full Moon (PI): 100% illuminated.
-    // The visualization code in original file used: const illumination = Math.cos(phaseAngle);
-    // cos(0) = 1 (Full?), cos(PI) = -1.
-    // If cos > 0, draw one way.
-    
-    // Let's trust the visual logic from the original file for now, but ensure the labels match.
-    // Original: 
-    // if deg < 10 (0) -> Full Moon
-    // if deg ~ 180 -> New Moon
-    // This implies Angle 0 is Full Moon in this code's logic.
-    // That means Sun is behind Earth (relative to Moon at 0).
-    
-    // Let's stick to the original rendering logic to maintain visual consistency
-    const illumination = Math.cos(phaseAngle);
+    // Fixed astronomical reference frame:
+    // - Sunlight always comes from the RIGHT side of the phase disk.
+    // - orbitAngle = 0   => New Moon
+    // - orbitAngle = PI  => Full Moon
+    // - 0..PI            => Waxing phases (right side lit)
+    // - PI..2PI          => Waning phases (left side lit)
+    const phaseAngle = ((angle % (Math.PI * 2)) + (Math.PI * 2)) % (Math.PI * 2);
+    const illuminationFraction = (1 - Math.cos(phaseAngle)) / 2; // 0=new, 1=full
+    const litOnRight = phaseAngle < Math.PI;
+    const isGibbous = illuminationFraction > 0.5;
+    const terminatorRadiusX = Math.abs(Math.cos(phaseAngle)) * r;
+    const moonLitColor = '#e2e8f0';
+    const moonShadowColor = '#050a10';
 
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.clip();
 
-    // Light part
-    ctx.fillStyle = '#e2e8f0'; // Moon color
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = '#e2e8f0';
-    
-    // Visual logic from original file...
-    // It was using 'var(--accent-cyan)' for light. Let's keep that style or make it moon-white?
-    // Original used 'var(--accent-cyan)'.
-    ctx.fillStyle = 'var(--accent-cyan)';
-    ctx.shadowColor = 'var(--accent-cyan)';
-
-    // Drawing the phase
-    // This logic approximates the crescent/gibbous shapes
-    if (illumination >= 0) {
-        // "Fullish" side
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, -Math.PI/2, Math.PI/2, false); // Right half
-        ctx.fill();
-        ctx.beginPath();
-        // Ellipse to cover/add
-        ctx.ellipse(cx, cy, r * illumination, r, 0, 0, Math.PI * 2);
-        ctx.fill();
+    // Draw the sun-facing semicircle first (right for waxing, left for waning).
+    ctx.fillStyle = moonLitColor;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = 'rgba(226, 232, 240, 0.45)';
+    ctx.beginPath();
+    if (litOnRight) {
+        ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, false); // Right half
     } else {
-        // "Newish" side
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, -Math.PI/2, Math.PI/2, false); // Right half
-        ctx.fill();
-        
-        ctx.fillStyle = '#050a10'; // Shadow color
-        ctx.shadowBlur = 0;
-        ctx.globalCompositeOperation = 'source-over';
-        
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, r * Math.abs(illumination), r, 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(cx, cy, r, Math.PI / 2, -Math.PI / 2, false); // Left half
     }
+    ctx.fill();
+
+    // Adjust to crescent/gibbous by adding/removing with a centered terminator ellipse.
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = isGibbous ? moonLitColor : moonShadowColor;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, terminatorRadiusX, r, 0, 0, Math.PI * 2);
+    ctx.fill();
 
     ctx.restore();
 
-    // Determine Phase Name
-    // deg 0 = Full Moon (per logic above)
-    // deg 180 = New Moon
+    // Determine phase name in the same fixed frame used by rendering.
     const deg = (phaseAngle * 180 / Math.PI) % 360;
     let name = "";
-    
-    // Adjusting ranges to be more precise
-    if (deg < 10 || deg > 350) name = "FULL_MOON";
-    else if (deg < 80) name = "WANING_GIBBOUS";
-    else if (deg < 100) name = "LAST_QUARTER";
-    else if (deg < 170) name = "WANING_CRESCENT";
-    else if (deg < 190) name = "NEW_MOON";
-    else if (deg < 260) name = "WAXING_CRESCENT";
-    else if (deg < 280) name = "FIRST_QUARTER";
-    else name = "WAXING_GIBBOUS";
+
+    if (deg < 12 || deg >= 348) name = "NEW_MOON";
+    else if (deg < 78) name = "WAXING_CRESCENT";
+    else if (deg < 102) name = "FIRST_QUARTER";
+    else if (deg < 168) name = "WAXING_GIBBOUS";
+    else if (deg < 192) name = "FULL_MOON";
+    else if (deg < 258) name = "WANING_GIBBOUS";
+    else if (deg < 282) name = "LAST_QUARTER";
+    else name = "WANING_CRESCENT";
     
     statPhase.textContent = name;
 }
